@@ -2,10 +2,28 @@
 
 ## 0.3.6 - 2026-10-22
 
-- Expanded the embedded 24 px LVGL Chinese font (`ui_font_cn_24`) to 14,137 glyphs covering Simplified Chinese (GB2312), Traditional Chinese (Big5 Common + OpenCC variants + high-frequency characters), and CJK/fullwidth punctuation.
-- Disabled missing-glyph rectangle placeholders (`LV_USE_FONT_PLACEHOLDER 0`) and expanded CJK line-break ranges to include fullwidth punctuation.
-- Hardened `Audio::latinToUTF8()` so UTF-8 stream metadata with truncated trailing bytes preserves valid multi-byte CJK characters instead of re-encoding as Latin-1 mojibake.
-- Fixed volume overlay auto-hide clearing `ui_Label2` program titles and stripped leading `"- "` from stream titles with empty artist fields.
+### 更新内容 / What's Changed
+
+- **大幅扩充 24px 简繁中文字库 (`ui_font_cn_24`)**：字库容量由原本仅 106 个简体字扩展至 **14,137 个字符**，完整覆盖：
+  - **简体中文**：GB2312 全部一、二级常用汉字（6,763 字）及扩展符号。
+  - **繁体中文**：Big5 常用繁体字（5,401 字）、OpenCC 简繁/港台异体字表全部字符，以及 Rime 词频前 1,500 个扩展高频字（涵盖 `瑋`、`喆`、`嬅`、`峯`、`靚` 等歌手与曲名常用字），完美支持港台及新马华语电台（如 YES 933、CAPITAL 958、BCC 中广流行网/音乐网等）的实时节目单显示。
+  - **标点与符号**：完整包含中文全角标点（`《》〈〉「」『』【】（）、，。：；！？—…～`）、全角 ASCII 及 Latin-1 扩展符号。
+- **优化 LVGL 缺字占位与中文换行**：
+  - 关闭 `LV_USE_FONT_PLACEHOLDER`（设为 `0`），防止电台元数据中夹带 Emoji 或特殊控制字符时在 1-bit 单色反射屏上画出乱码黑框。
+  - 扩展 `_lv_txt_is_break_char()` 断行范围至 `0x4E00..0x9FFF`、全角标点 `0x3000..0x303F` 及全角字符 `0xFF01..0xFF65`，使带书名号或括号的长节目名能正常自动换行。
+- **增强流媒体 UTF-8 元数据容错 (`Audio::latinToUTF8`)**：
+  - 当电台下发的 UTF-8 `StreamTitle` 末尾因定长截断出现残缺字节时，原地剔除残缺字节并保留合法的 UTF-8 中文字符，避免整条中文标题被误判为 Latin-1 重编码成乱码。
+- **修复节目信息显示细节**：
+  - 修复调节音量 1.5 秒提示消失后调用 `showCurrentStation()` 清空 `ui_Label2` 导致当前节目名消失的问题。
+  - 自动去除无歌手字段电台（如 `" - 現場談話節目..."`）开头的冗余 `"- "` 前缀。
+
+### 固件下载与烧录说明
+
+| 文件 | 说明 | 烧录偏移地址 |
+| --- | --- | --- |
+| `firmware.factory.bin` | 完整合并镜像（含 Bootloader、分区表、应用），推荐首次烧录使用 | `0x0` |
+| `firmware.bin` | 仅应用固件（适合已有分区表设备的升级烧录） | `0x10000` |
+| `SHA256SUMS.txt` | 固件 SHA256 校验值 | - |
 
 ## 0.3.5 - 2026-09-21
 

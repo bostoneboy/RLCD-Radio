@@ -20,6 +20,31 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Generate Release Notes from CHANGELOG.md
+        run: |
+          python3 - << 'EOF'
+          import re, os
+          ref = os.environ.get("GITHUB_REF_NAME", "")
+          ver = ref.lstrip("v") if ref.startswith("v") else None
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          pattern = r"^##\s+" + (re.escape(ver) if ver else r"([0-9]+\.[0-9]+\.[0-9]+)") + r"[^\n]*\n(.*?)(?=^##\s+|\Z)"
+          m = re.search(pattern, text, flags=re.M | re.S)
+          notes = m.group(1).strip() if (m and ver) else (m.group(2).strip() if m else text.strip())
+          open("RELEASE_NOTES.md", "w", encoding="utf-8").write(notes + "\n")
+          EOF
+
+      - name: Sync existing GitHub Release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "${TAG}" != v* ]]; then
+            TAG="v$(sed -n 's/^## \([0-9.]*\).*/\1/p' CHANGELOG.md | head -n 1)"
+          fi
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release edit "${TAG}" --title "${TAG}" --notes-file RELEASE_NOTES.md
+          fi
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -62,6 +87,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
-            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release edit "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes-file RELEASE_NOTES.md
+          fi
           gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
