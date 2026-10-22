@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.6 - 2026-10-22
+
+- Expanded the embedded 24 px LVGL Chinese font (`ui_font_cn_24`) to 14,137 glyphs covering Simplified Chinese (GB2312), Traditional Chinese (Big5 Common + OpenCC variants + high-frequency characters), and CJK/fullwidth punctuation.
+- Disabled missing-glyph rectangle placeholders (`LV_USE_FONT_PLACEHOLDER 0`) and expanded CJK line-break ranges to include fullwidth punctuation.
+- Hardened `Audio::latinToUTF8()` so UTF-8 stream metadata with truncated trailing bytes preserves valid multi-byte CJK characters instead of re-encoding as Latin-1 mojibake.
+- Fixed volume overlay auto-hide clearing `ui_Label2` program titles and stripped leading `"- "` from stream titles with empty artist fields.
+
 ## 0.3.5 - 2026-09-21
 
 - Added dual physical button control: BOOT (GPIO0) short-press volume up, long-press next station; KEY (GPIO18) short-press volume down, long-press previous station.
