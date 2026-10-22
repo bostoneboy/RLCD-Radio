@@ -428,13 +428,17 @@ void my_audio_info(Audio::msg_t m)
 {
   Serial.printf("Audio Event -> %s: %s (code: %d)\n", m.s, m.msg, m.e);
   bool update_label3 = false;
-  if (m.e == Audio::evt_id3data || strncmp(m.s, "streamtitle", 11) == 0)
+  if ((m.e == Audio::evt_id3data && strncmp(m.msg, "Title: ", 7) == 0) || strncmp(m.s, "streamtitle", 11) == 0)
   {
     if (Lvgl_lock(500))
     {
       const char *dynamic_text = m.msg;
-      if (strstr(m.msg, "Title: ") != NULL)
-        dynamic_text = m.msg + 7;
+      if (strncmp(dynamic_text, "Title: ", 7) == 0)
+        dynamic_text += 7;
+      while (*dynamic_text == ' ')
+        dynamic_text++;
+      if (strncmp(dynamic_text, "- ", 2) == 0)
+        dynamic_text += 2;
       lv_label_set_text(ui_Label2, dynamic_text);
       Lvgl_unlock();
     }
@@ -1134,9 +1138,21 @@ void loop()
   {
     volumeDisplayHideTime = 0;
     if (!airplaySessionActive)
-      showCurrentStation();
+    {
+      if (currentStationIsValid() && Lvgl_lock(500))
+      {
+        lv_label_set_text(ui_Label1, stationNames[curr_url].c_str());
+        Lvgl_unlock();
+      }
+    }
     else
-      showAirPlayStatus("正在播放");
+    {
+      if (Lvgl_lock(500))
+      {
+        lv_label_set_text(ui_Label1, "AirPlay");
+        Lvgl_unlock();
+      }
+    }
   }
   if (!airplaySessionActive && !airplaySessionPending && isPlaying && currentStationIsValid() && (millis() - lastDataTime > RECONNECT_TIMEOUT))
   {

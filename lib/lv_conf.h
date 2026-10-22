@@ -417,7 +417,7 @@
 #endif
 
 /*Enable drawing placeholders when glyph dsc is not found*/
-#define LV_USE_FONT_PLACEHOLDER 1
+#define LV_USE_FONT_PLACEHOLDER 0
 
 /*=================
  *  TEXT SETTINGS

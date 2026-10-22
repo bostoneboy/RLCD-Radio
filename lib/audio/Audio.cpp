@@ -1301,33 +1301,81 @@ void Audio::latinToUTF8(ps_ptr<char>& buff, bool UTF8check) {
     // to the UTF-8 encoding schema:
 
     if (UTF8check) {
-        while (buff[pos] != '\0') {
-            if (buff[pos] <= 0x7F) { // 0xxxxxxx: ASCII
+        uint16_t validMultibyte = 0;
+        const size_t len = buff.strlen();
+        while (pos < len && buff[pos] != '\0') {
+            uint8_t b0 = (uint8_t)buff[pos];
+            if (b0 <= 0x7F) { // 0xxxxxxx: ASCII
                 pos++;
-            } else if ((buff[pos] & 0xE0) == 0xC0) {
-                if (pos + 1 >= buff.strlen()) isUTF8 = false;
+            } else if ((b0 & 0xE0) == 0xC0) {
+                if (pos + 1 >= len) { isUTF8 = false; break; }
+                uint8_t b1 = (uint8_t)buff[pos + 1];
                 // 110xxxxx 10xxxxxx: 2-byte
-                if ((buff[pos + 1] & 0xC0) != 0x80) isUTF8 = false;
-                if (buff[pos] < 0xC2) isUTF8 = false; // Overlong encoding
+                if ((b1 & 0xC0) != 0x80 || b0 < 0xC2) { isUTF8 = false; break; }
+                validMultibyte++;
                 pos += 2;
-            } else if ((buff[pos] & 0xF0) == 0xE0) {
+            } else if ((b0 & 0xF0) == 0xE0) {
                 // 1110xxxx 10xxxxxx 10xxxxxx: 3-byte
-                if ((buff[pos + 1] & 0xC0) != 0x80 || (buff[pos + 2] & 0xC0) != 0x80) isUTF8 = false;
-                if (buff[pos] == 0xE0 && buff[pos + 1] < 0xA0) isUTF8 = false;  // Overlong
-                if (buff[pos] == 0xED && buff[pos + 1] >= 0xA0) isUTF8 = false; // UTF-16 surrogate
+                if (pos + 2 >= len) { isUTF8 = false; break; }
+                uint8_t b1 = (uint8_t)buff[pos + 1];
+                uint8_t b2 = (uint8_t)buff[pos + 2];
+                if ((b1 & 0xC0) != 0x80 || (b2 & 0xC0) != 0x80) { isUTF8 = false; break; }
+                if (b0 == 0xE0 && b1 < 0xA0) { isUTF8 = false; break; }  // Overlong
+                if (b0 == 0xED && b1 >= 0xA0) { isUTF8 = false; break; } // UTF-16 surrogate
+                validMultibyte++;
                 pos += 3;
-            } else if ((buff[pos] & 0xF8) == 0xF0) {
+            } else if ((b0 & 0xF8) == 0xF0) {
                 // 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx: 4-byte
-                if ((buff[pos + 1] & 0xC0) != 0x80 || (buff[pos + 2] & 0xC0) != 0x80 || (buff[pos + 3] & 0xC0) != 0x80) isUTF8 = false;
-                if (buff[pos] == 0xF0 && buff[pos + 1] < 0x90) isUTF8 = false;                       // Overlong
-                if (buff[pos] > 0xF4 || (buff[pos] == 0xF4 && buff[pos + 1] > 0x8F)) isUTF8 = false; // > U+10FFFF
+                if (pos + 3 >= len) { isUTF8 = false; break; }
+                uint8_t b1 = (uint8_t)buff[pos + 1];
+                uint8_t b2 = (uint8_t)buff[pos + 2];
+                uint8_t b3 = (uint8_t)buff[pos + 3];
+                if ((b1 & 0xC0) != 0x80 || (b2 & 0xC0) != 0x80 || (b3 & 0xC0) != 0x80) { isUTF8 = false; break; }
+                if (b0 == 0xF0 && b1 < 0x90) { isUTF8 = false; break; }                       // Overlong
+                if (b0 > 0xF4 || (b0 == 0xF4 && b1 > 0x8F)) { isUTF8 = false; break; }        // > U+10FFFF
+                validMultibyte++;
                 pos += 4;
             } else {
                 isUTF8 = false; // Invalid first byte
+                break;
             }
-            if (!isUTF8) break;
         }
         if (isUTF8) return; // is UTF-8, do nothing
+
+        // If the string already contains valid multi-byte UTF-8 sequences (e.g. CJK characters)
+        // and only failed because of a truncated/stray byte, strip the invalid bytes in-place
+        // instead of corrupting the valid UTF-8 characters via Latin-1 re-encoding.
+        if (validMultibyte > 0) {
+            uint16_t r = 0, w = 0;
+            while (r < len && buff[r] != '\0') {
+                uint8_t b0 = (uint8_t)buff[r];
+                if (b0 <= 0x7F) {
+                    buff[w++] = buff[r++];
+                } else if ((b0 & 0xE0) == 0xC0 && r + 1 < len && ((uint8_t)buff[r + 1] & 0xC0) == 0x80 && b0 >= 0xC2) {
+                    buff[w++] = buff[r++];
+                    buff[w++] = buff[r++];
+                } else if ((b0 & 0xF0) == 0xE0 && r + 2 < len &&
+                           ((uint8_t)buff[r + 1] & 0xC0) == 0x80 && ((uint8_t)buff[r + 2] & 0xC0) == 0x80 &&
+                           !(b0 == 0xE0 && (uint8_t)buff[r + 1] < 0xA0) && !(b0 == 0xED && (uint8_t)buff[r + 1] >= 0xA0)) {
+                    buff[w++] = buff[r++];
+                    buff[w++] = buff[r++];
+                    buff[w++] = buff[r++];
+                } else if ((b0 & 0xF8) == 0xF0 && r + 3 < len &&
+                           ((uint8_t)buff[r + 1] & 0xC0) == 0x80 && ((uint8_t)buff[r + 2] & 0xC0) == 0x80 &&
+                           ((uint8_t)buff[r + 3] & 0xC0) == 0x80 &&
+                           !(b0 == 0xF0 && (uint8_t)buff[r + 1] < 0x90) &&
+                           !(b0 > 0xF4 || (b0 == 0xF4 && (uint8_t)buff[r + 1] > 0x8F))) {
+                    buff[w++] = buff[r++];
+                    buff[w++] = buff[r++];
+                    buff[w++] = buff[r++];
+                    buff[w++] = buff[r++];
+                } else {
+                    r++; // skip broken byte
+                }
+            }
+            buff[w] = '\0';
+            return;
+        }
     }
     ps_ptr<char> iso8859_1;
     iso8859_1.assign(buff.get());
