@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.7 - 2026-10-23
+
+### 更新内容 / What's Changed
+
+- **全面支持 HTTP 301/302/303/307/308 流媒体重定向跳转 (`Audio::parseHttpResponseHeader` / `Audio::httpPrint`)**：
+  - 修复含 `302 Found` 动态调度跳转的在线电台（如 `https://playerservices.streamtheworld.com/api/livestream-redirect/YES933_PREM.aac` 等）无法播放的问题。
+  - 放行 `301`、`302`、`303`、`307`、`308` 重定向状态码，并在 `3xx` 跳转响应阶段跳过对跳转响应体 `Content-Type`（如 `text/html`、`application/xml`）的音频格式校验，防止在解析到 `Location:` 头之前误判退出或将跳转响应体误识别为音频数据。
+  - 完整支持绝对地址（`http://` / `https://`）、协议相对路径（`//...`）及根相对路径（`/...`）三种 `Location:` 跳转格式。
+  - 在执行重定向请求前主动关闭当前连接并重置 `m_f_connectionClose` 状态，修复跨主机/跨协议（HTTP ↔ HTTPS）或 `Connection: close` 下连接状态残留导致的二次握手失败。
+- **优化 HTTP 响应头读取与请求头规范 (`Audio::parseHttpResponseHeader` / `Audio::dismantle_host`)**：
+  - 修复等待服务器响应头期间 `!m_client->available()` 循环无延时导致的 100% CPU 空转忙等问题，加入 `vTaskDelay(2)` 让出 CPU 给 Wi-Fi / lwIP / TLS 协议栈，并仅在读到有效字节（`audioFileRead() >= 0`）时扫描 `\r\n\r\n` 结束符；响应头超时时正确标记 `m_f_timeout = true`。
+  - 修复显式携带默认端口（如 `:443` 或 `:80`）的重定向 URL 在 `Host:` 请求头中附带冗余默认端口号的问题，提升对严格 CDN 与 Icecast 服务器的兼容性。
+  - 移除重定向请求中非标准的 `Icy-MetaData:2` 请求头，补齐 `Pragma: no-cache`、`Cache-Control: no-cache`、连接超时设置及 `.ogg`/`.flac`/`.opus` 等后缀的编码器预期识别。
+- **修复多级跳转与 TLS 握手期间误触发 15 秒断流重连看门狗 (`src/main.cpp`)**：
+  - 在 `startAudio()` 完成 `audio.connecttohost(url)` 调用后立即刷新 `lastDataTime`。
+  - 在 `my_audio_info()` 收到连接建立（`has been established`）、重定向跳转（`redirect to` / `next URL:`）、解码器初始化（`Decoder has been initialized`）及流就绪（`stream ready`）事件时同步刷新 `lastDataTime`，防止多次 TLS 握手 + 缓冲填充耗时超过 15 秒导致陷入无限重连循环。
+
+### 固件下载与烧录说明
+
+| 文件 | 说明 | 烧录偏移地址 |
+| --- | --- | --- |
+| `firmware.factory.bin` | 完整合并镜像（含 Bootloader、分区表、应用），推荐首次烧录使用 | `0x0` |
+| `firmware.bin` | 仅应用固件（适合已有分区表设备的升级烧录） | `0x10000` |
+| `SHA256SUMS.txt` | 固件 SHA256 校验值 | - |
+
 ## 0.3.6 - 2026-10-22
 
 ### 更新内容 / What's Changed
