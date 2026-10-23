@@ -185,6 +185,7 @@ void startAudio(const char *url)
   Serial.println(url);
   lastDataTime = millis();
   isPlaying = audio.connecttohost(url);
+  lastDataTime = millis();
 }
 void audio_process_i2s(int32_t *outBuff, int16_t validSamples, bool *continueI2S)
 {
@@ -427,6 +428,15 @@ static char audio_bitrate[12] = "--- kbps";
 void my_audio_info(Audio::msg_t m)
 {
   Serial.printf("Audio Event -> %s: %s (code: %d)\n", m.s, m.msg, m.e);
+  if (m.e == Audio::evt_info &&
+      (strstr(m.msg, "has been established") != NULL ||
+       strstr(m.msg, "redirect to") != NULL ||
+       strstr(m.msg, "next URL:") != NULL ||
+       strstr(m.msg, "Decoder has been initialized") != NULL ||
+       strstr(m.msg, "stream ready") != NULL))
+  {
+    lastDataTime = millis();
+  }
   bool update_label3 = false;
   if ((m.e == Audio::evt_id3data && strncmp(m.msg, "Title: ", 7) == 0) || strncmp(m.s, "streamtitle", 11) == 0)
   {

@@ -677,7 +677,9 @@ audiolib::hwoe_t Audio::dismantle_host(const char* host) {
     result.port = result.ssl ? 443 : 80; // default
     if (port_sep && (!path_sep || port_sep < path_sep)) {
         result.port = atoi(port_sep + 1);
-        result.rqh_host.appendf(":%u", result.port);
+        if ((result.ssl && result.port != 443) || (!result.ssl && result.port != 80)) {
+            result.rqh_host.appendf(":%u", result.port);
+        }
     }
 
     // ❓ 4. extract extension (path)
@@ -891,43 +893,52 @@ bool Audio::httpPrint(const char* host) {
     auto dismantledLastHost = dismantle_host(m_currentHost.get());
     cur_hwoe.clone_from(dismantledLastHost.hwoe);
 
-    bool f_equal = true;
-    if (hwoe.equals(cur_hwoe) && port == dismantledLastHost.port) {
+    const char* user_agent_0 = "Mozilla/5.0 (X11; Linux x86_64) Chrome/146.0.0.0 Safari/537.36";
+    const char* user_agent_1 = "VLC/3.0.21 LibVLC/3.0.21 AppleWebKit/537.36 (KHTML, like Gecko)";
+
+    bool f_equal = false;
+    if (hwoe.equals(cur_hwoe) && port == dismantledLastHost.port && m_f_ssl == dismantledLastHost.ssl && !m_f_connectionClose) {
         f_equal = true;
-    } else {
-        f_equal = false;
     }
+    m_f_connectionClose = false;
 
     rqh.assign("GET /");
     rqh.append(path.get());
     rqh.append(" HTTP/1.1\r\n");
     rqh.appendf("Host: %s\r\n", rqh_host.get());
     rqh.append("Icy-MetaData:1\r\n");
-    rqh.append("Icy-MetaData:2\r\n");
-    rqh.append("Accept:*/*\r\n");
-    rqh.append("User-Agent: VLC/3.0.21 LibVLC/3.0.21 AppleWebKit/537.36 (KHTML, like Gecko)\r\n");
+    rqh.append("Pragma: no-cache\r\n");
+    rqh.append("Cache-Control: no-cache\r\n");
+    rqh.append("Accept: */*\r\n");
+    rqh.appendf("User-Agent: %s\r\n", m_f_alt_user_agent ? user_agent_0 : user_agent_1);
     rqh.append("Accept-Encoding: identity;q=1,*;q=0\r\n");
     rqh.append("Connection: keep-alive\r\n\r\n");
 
     info(*this, evt_info, "next URL: \"%s\"", c_host.get());
 
     if (f_equal == false) {
-        if (m_client->connected()) m_client->stop();
+        if (m_client && m_client->connected()) m_client->stop();
+        if (client.connected()) client.stop();
+        if (clientsecure.connected()) clientsecure.stop();
     }
-    if (!m_client->connected()) {
+    if (!m_client || !m_client->connected()) {
         if (m_f_ssl) {
             m_client = static_cast<NetworkClientSecure*>(&clientsecure);
-            if (m_f_ssl && port == 80) port = 443;
+            if (port == 80) port = 443;
         } else {
             m_client = static_cast<NetworkClient*>(&client);
         }
         if (f_equal) info(*this, evt_info, "The host has disconnected, reconnecting");
 
+        uint32_t timestamp = millis();
+        m_client->setTimeout(m_f_ssl ? m_timeout_ms_ssl : m_timeout_ms);
         if (!m_client->connect(hwoe.get(), port)) {
             AUDIO_LOG_ERROR("connection lost %s", c_host.c_get());
             stopSong();
             return false;
         }
+        uint32_t dt = millis() - timestamp;
+        info(*this, evt_info, "%s has been established in %lu ms", m_f_ssl ? "SSL" : "Connection", (long unsigned int)dt);
     }
     m_currentHost.clone_from(c_host);
     m_client->print(rqh.get());
@@ -940,8 +951,12 @@ bool Audio::httpPrint(const char* host) {
         m_expectedCodec = CODEC_WAV;
     else if (extension.ends_with_icase(".m4a"))
         m_expectedCodec = CODEC_M4A;
-    else if (extension.ends_with_icase(".flac"))
+    else if (extension.ends_with_icase(".ogg"))
+        m_expectedCodec = CODEC_OGG;
+    else if (extension.ends_with_icase(".flac") || extension.ends_with_icase("-flac"))
         m_expectedCodec = CODEC_FLAC;
+    else if (extension.ends_with_icase(".opus") || extension.ends_with_icase("/opus"))
+        m_expectedCodec = CODEC_OPUS;
     else
         m_expectedCodec = CODEC_NONE;
 
@@ -4820,17 +4835,25 @@ bool Audio::parseHttpResponseHeader() { // this is the response to a GET / reque
     uint16_t pos = 0;
 
     while (true) { // read the header first and store it in m_httpRespHdrBuff
-        if (m_client->available()) { m_httpRespHdrBuff[pos++] = audioFileRead(); }
-        if (m_httpRespHdrBuff.ends_with("\r\n\r\n")) break;
-        if (m_httpRespHdrBuff.ends_with("\n\n")) break;
-        if (pos == m_httpRespHdrBuff.size()) {
-            AUDIO_LOG_WARN("responseHeaderline overflow");
-            m_httpRespHdrBuff[pos - 1] = '\0';
-            break;
+        if (m_client->available()) {
+            int c = audioFileRead();
+            if (c >= 0) {
+                m_httpRespHdrBuff[pos++] = (char)c;
+                if (m_httpRespHdrBuff.ends_with("\r\n\r\n")) break;
+                if (m_httpRespHdrBuff.ends_with("\n\n")) break;
+                if (pos == m_httpRespHdrBuff.size()) {
+                    AUDIO_LOG_WARN("responseHeaderline overflow");
+                    m_httpRespHdrBuff[pos - 1] = '\0';
+                    break;
+                }
+            }
+        } else {
+            vTaskDelay(2);
         }
         if ((millis() - m_phreh.ctime) > m_phreh.timeout) {
             AUDIO_LOG_ERROR("timeout");
             m_phreh.f_time = false;
+            m_f_timeout = true;
             stopSong();
             return false;
         }
@@ -4838,6 +4861,7 @@ bool Audio::parseHttpResponseHeader() { // this is the response to a GET / reque
 
     ps_ptr<char> rhl;
     bool         ct_seen = false;
+    int          sc = 0;
 
     // m_httpRespHdrBuff.println();
 
@@ -4868,7 +4892,7 @@ bool Audio::parseHttpResponseHeader() { // this is the response to a GET / reque
             statusCode[1] = rhl[10];
             statusCode[2] = rhl[11];
             statusCode[3] = '\0';
-            int sc = atoi(statusCode);
+            sc = atoi(statusCode);
             if (sc == 403 && !m_f_alt_user_agent) { // HTTP/1.1 403 Forbidden
                 m_f_alt_user_agent = true;
                 AUDIO_LOG_WARN("403 Forbidden, test alternative user agent");
@@ -4876,48 +4900,54 @@ bool Audio::parseHttpResponseHeader() { // this is the response to a GET / reque
                 return true;
             }
             m_f_alt_user_agent = false;
-            if (sc > 310) { // e.g. HTTP/1.1 301 Moved Permanently
+            if (sc >= 400 || (sc > 310 && sc != 307 && sc != 308)) { // e.g. HTTP/1.1 301/302/303/307/308 Redirect
                 info(*this, evt_streamtitle, "%s", rhl.get());
                 goto exit;
             }
         } else if (rhl.starts_with_icase("content-type:")) { // content-type: text/html; charset=UTF-8
-            int idx = rhl.index_of(';', 13);
-            if (idx > 0) rhl[idx] = '\0';
-            if (parseContentType(rhl.get() + 13))
-                ct_seen = true;
-            else {
-                AUDIO_LOG_WARN("unknown contentType %s", rhl.get() + 13);
-                goto exit;
+            if (sc < 300 || sc >= 400) {
+                int idx = rhl.index_of(';', 13);
+                if (idx > 0) rhl[idx] = '\0';
+                if (parseContentType(rhl.get() + 13))
+                    ct_seen = true;
+                else {
+                    AUDIO_LOG_WARN("unknown contentType %s", rhl.get() + 13);
+                    goto exit;
+                }
             }
         }
 
         else if (rhl.starts_with_icase("location:")) {
-            int pos = rhl.index_of_icase("http", 0);
-            if (pos == -1) {
-                int doubleSlash = rhl.index_of("//");                   // e.g. location: //frontend.streamonkey.net/...  host: http://webstream.radiof.de/
-                if (doubleSlash >= 9) rhl.insert("http:", doubleSlash); // ==> http://frontend.streamonkey.net/fhn-radiof945/stream/mp3?aggregator=fh-tinyurl
-                pos = rhl.index_of_icase("http", 0);
+            ps_ptr<char> loc;
+            loc.assign(rhl.get() + 9);
+            loc.trim();
+            if (loc.starts_with("//")) {
+                loc.insert(m_f_ssl ? "https:" : "http:", 0);
+            } else if (loc.starts_with("/")) {
+                auto dismantledCur = dismantle_host(m_currentHost.get());
+                ps_ptr<char> prefix;
+                prefix.assign(dismantledCur.ssl ? "https://" : "http://");
+                prefix.append(dismantledCur.rqh_host.c_get());
+                loc.insert(prefix.c_get(), 0);
             }
+            int pos = loc.index_of_icase("http", 0);
             if (pos >= 0) {
-                const char* c_host = (rhl.get() + pos);
+                const char* c_host = (loc.get() + pos);
                 if (!m_currentHost.equals(c_host)) { // prevent a loop
                     int pos_slash = indexOf(c_host, "/", 9);
-                    if (pos_slash > 9) {
-                        if (!strncmp(c_host, m_currentHost.get(), pos_slash)) {
-                            info(*this, evt_info, "redirect to new extension at existing host \"%s\"", c_host);
-                            if (m_playlistFormat == FORMAT_M3U8) {
-                                //    m_lastHost.assign(c_host);
-                                m_f_m3u8data = true;
-                            }
-                            httpPrint(c_host);
-                            while (m_client->available()) audioFileRead(); // empty client buffer
-                            return true;
+                    if (pos_slash > 9 && !strncmp(c_host, m_currentHost.get(), pos_slash)) {
+                        info(*this, evt_info, "redirect to new extension at existing host \"%s\"", c_host);
+                        if (m_playlistFormat == FORMAT_M3U8) {
+                            //    m_lastHost.assign(c_host);
+                            m_f_m3u8data = true;
                         }
+                    } else {
+                        info(*this, evt_info, "redirect to new host \"%s\"", c_host);
+                        m_f_reset_m3u8Codec = false;
                     }
-                    info(*this, evt_info, "redirect to new host \"%s\"", c_host);
-                    m_f_reset_m3u8Codec = false;
-                    httpPrint(c_host);
-                    return true;
+                    if (m_client && m_client->connected()) m_client->stop();
+                    m_f_connectionClose = false;
+                    return httpPrint(c_host);
                 }
             } else {
                 AUDIO_LOG_WARN("unknown redirection: %s", rhl.c_get());
